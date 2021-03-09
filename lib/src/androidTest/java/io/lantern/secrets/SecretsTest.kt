@@ -26,7 +26,7 @@ class SecretsTest {
         )
 
         val oldSecret = "I'm an old secret that wasn't secret"
-        prefs.edit().putString("oldSecret", oldSecret).commit()
+        prefs.edit().putString("oldSecret_unencrypted", oldSecret).commit()
         val newSecret = "I'm a new secret"
         secrets.put("newSecret", newSecret)
         assertEquals(

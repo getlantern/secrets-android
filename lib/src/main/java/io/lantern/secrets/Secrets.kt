@@ -9,7 +9,6 @@ import androidx.annotation.RequiresApi
 import java.nio.charset.Charset
 import java.security.KeyStore
 import java.security.SecureRandom
-import java.util.*
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -17,30 +16,45 @@ import javax.crypto.spec.GCMParameterSpec
 
 /**
  * Provides a mechanism for securely managing secrets stored in SharedPreferences. On Android M(23)
- * and above, keys and values are encrypted using AES256 GCM. On older versions of Android that
- * don't support AES256 GCM natively, secrets are not encrypted at all.
+ * and above, values are encrypted using AES256 GCM. On older versions of Android that don't support
+ * AES256 GCM natively, secrets are not encrypted at all.
+ *
+ * Key paths for encrypted values are automatically suffixed with "_unencrypted" whereas
+ * encrypted values are always stored at bare paths.
  *
  * @param masterKeyAlias the name of the AES/GCM master key in the Android Key Store. Secrets will
  *        automatically generate a master key if necessary
  * @param prefs the SharedPreferences in which to store secrets
  */
 class Secrets(private val masterKeyAlias: String, private val prefs: SharedPreferences) {
-    private val keyStore = KeyStore.getInstance("AndroidKeyStore").apply {
+    /**
+     * Secrets uses the AndroidKeyStore to store key material. This ensures that the key material
+     * never enters the Application's process space during crypto operations.
+     */
+    private val keyStore = KeyStore.getInstance(androidKeyStoreName).apply {
         load(null)
     }
 
+    private val secureRandom: SecureRandom
+        get() {
+            return SecureRandom()
+        }
+
     fun put(key: String, secret: String) {
-        prefs.edit().putString("${key}_encrypted", sealIfNecessary(secret)).commit()
+        if (isEncrypted) {
+            prefs.edit().putString(key, seal(secret)).commit()
+        } else {
+            prefs.edit().putString("${key}_unencrypted", secret)
+        }
     }
 
     fun get(key: String): String? {
-        val result = prefs.getString("${key}_encrypted", null)
-        if (result != null) {
-            return unsealIfNecessary(result)
+        val unencryptedSecret = prefs.getString("${key}_unencrypted", null)
+        if (!isEncrypted) {
+            return unencryptedSecret
         }
-        // fall back to unencrypted value (for example if we've upgrade Android from a version that
-        // doesn't support encryption to one that does.
-        return prefs.getString(key, null)
+        val result = prefs.getString(key, null) ?: return unencryptedSecret
+        return unseal(result)
     }
 
     @Synchronized
@@ -50,7 +64,7 @@ class Secrets(private val masterKeyAlias: String, private val prefs: SharedPrefe
             return result
         }
         val newBytes = ByteArray(defaultSecretLength)
-        SecureRandom.getInstance("SHA1PRNG").nextBytes(newBytes)
+        secureRandom.nextBytes(newBytes)
         val newResult = Base64.encodeToString(newBytes, Base64.DEFAULT)
         put(key, newResult)
         return newResult
@@ -59,7 +73,7 @@ class Secrets(private val masterKeyAlias: String, private val prefs: SharedPrefe
     /**
      * Indicates whether or not these secrets are encrypted.
      */
-    val isEncrypted: Boolean
+    private val isEncrypted: Boolean
         get() {
             return Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
         }
@@ -86,44 +100,43 @@ class Secrets(private val masterKeyAlias: String, private val prefs: SharedPrefe
         return keyGen.generateKey()
     }
 
-    fun sealIfNecessary(plainText: String): String {
-        if (isEncrypted) {
-            return Base64.encodeToString(
-                seal(plainText.toByteArray(Charset.defaultCharset())),
-                Base64.DEFAULT
-            )
-        } else {
-            return plainText;
-        }
-    }
-
-    fun unsealIfNecessary(cipherText: String): String {
-        if (isEncrypted) {
-            return unseal(
-                Base64.decode(
-                    cipherText,
-                    Base64.DEFAULT
-                )
-            ).toString(Charset.defaultCharset())
-        } else {
-            return cipherText;
-        }
+    @RequiresApi(api = Build.VERSION_CODES.M)
+    fun seal(plainText: String): String {
+        return Base64.encodeToString(
+            doSeal(plainText.toByteArray(Charset.defaultCharset())),
+            Base64.DEFAULT
+        )
     }
 
     @RequiresApi(api = Build.VERSION_CODES.M)
-    fun seal(plainText: ByteArray): ByteArray {
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, getMasterKey(), SecureRandom.getInstance("SHA1PRNG"))
+    fun unseal(cipherText: String): String {
+        return doUnseal(
+            Base64.decode(
+                cipherText,
+                Base64.DEFAULT
+            )
+        ).toString(Charset.defaultCharset())
+    }
+
+    @RequiresApi(api = Build.VERSION_CODES.M)
+    fun doSeal(plainText: ByteArray): ByteArray {
+        val cipher = Cipher.getInstance(cipherName)
+        cipher.init(Cipher.ENCRYPT_MODE, getMasterKey(), secureRandom)
         val cipherText = cipher.doFinal(plainText);
         return cipher.iv + cipherText
     }
 
     @RequiresApi(api = Build.VERSION_CODES.M)
-    fun unseal(sealed: ByteArray): ByteArray {
-        val iv = Arrays.copyOf(sealed, 12)
-        val cipherText = Arrays.copyOfRange(sealed, 12, sealed.size)
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+    fun doUnseal(sealed: ByteArray): ByteArray {
+        val iv = sealed.copyOf(12)
+        val cipherText = sealed.copyOfRange(12, sealed.size)
+        val cipher = Cipher.getInstance(cipherName)
         cipher.init(Cipher.DECRYPT_MODE, getMasterKey(), GCMParameterSpec(128, iv))
         return cipher.doFinal(cipherText)
+    }
+
+    companion object {
+        private const val androidKeyStoreName = "AndroidKeyStore"
+        private const val cipherName = "AES/GCM/NoPadding"
     }
 }
