@@ -44,7 +44,7 @@ class Secrets(private val masterKeyAlias: String, private val prefs: SharedPrefe
         if (isEncrypted) {
             prefs.edit().putString(key, seal(secret)).commit()
         } else {
-            prefs.edit().putString("${key}_unencrypted", secret)
+            prefs.edit().putString("${key}_unencrypted", secret).commit()
         }
     }
 
@@ -122,7 +122,7 @@ class Secrets(private val masterKeyAlias: String, private val prefs: SharedPrefe
     fun doSeal(plainText: ByteArray): ByteArray {
         val cipher = Cipher.getInstance(cipherName)
         cipher.init(Cipher.ENCRYPT_MODE, getMasterKey(), secureRandom)
-        val cipherText = cipher.doFinal(plainText);
+        val cipherText = cipher.doFinal(plainText)
         return cipher.iv + cipherText
     }
 
