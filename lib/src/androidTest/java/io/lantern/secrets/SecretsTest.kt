@@ -4,14 +4,12 @@
 package io.lantern.secrets
 
 import android.content.Context
+import android.util.Base64
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.runner.RunWith
 import java.util.*
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertNotEquals
-import android.util.Base64
+import kotlin.test.*
 
 
 @RunWith(AndroidJUnit4::class)
@@ -38,6 +36,14 @@ class SecretsTest {
             oldSecret,
             secrets.get("oldSecret"),
             "old unencrypted secret should still be available"
+        )
+        assertNull(
+            prefs.getString("oldSecret_unencrypted", null),
+            "old unencrypted secret should have been removed from database after first fetch"
+        )
+        assertNotNull(
+            prefs.getString("oldSecret", null),
+            "oldSecret should have been moved into encrypted value after first fetch"
         )
         assertNotEquals(
             newSecret,

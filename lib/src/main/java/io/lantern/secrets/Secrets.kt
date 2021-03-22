@@ -48,13 +48,20 @@ class Secrets(private val masterKeyAlias: String, private val prefs: SharedPrefe
         }
     }
 
+    @Synchronized
     fun get(key: String): String? {
-        val unencryptedSecret = prefs.getString("${key}_unencrypted", null)
+        val unencryptedKey = "${key}_unencrypted"
+        val unencryptedSecret = prefs.getString(unencryptedKey, null)
         if (!isEncrypted) {
             return unencryptedSecret
         }
-        val result = prefs.getString(key, null) ?: return unencryptedSecret
-        return unseal(result)
+        if (unencryptedSecret != null) {
+            // encrypt secret and remove unencrypted
+            put(key, unencryptedSecret)
+            prefs.edit().putString(unencryptedKey, null).commit()
+            return unencryptedSecret
+        }
+        return prefs.getString(key, null)?.let { unseal(it) }
     }
 
     @Synchronized
