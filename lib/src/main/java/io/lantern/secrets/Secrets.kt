@@ -72,7 +72,7 @@ class Secrets(private val masterKeyAlias: String, private val prefs: SharedPrefe
         }
         val newBytes = ByteArray(defaultSecretLength)
         secureRandom.nextBytes(newBytes)
-        val newResult = Base64.encodeToString(newBytes, Base64.DEFAULT)
+        val newResult = Base64.encodeToString(newBytes, Base64.NO_WRAP or Base64.NO_PADDING)
         put(key, newResult)
         return newResult
     }
