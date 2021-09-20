@@ -70,11 +70,19 @@ class Secrets(private val masterKeyAlias: String, private val prefs: SharedPrefe
         if (result != null) {
             return result
         }
-        val newBytes = ByteArray(defaultSecretLength)
-        secureRandom.nextBytes(newBytes)
-        val newResult = Base64.encodeToString(newBytes, Base64.NO_WRAP or Base64.NO_PADDING)
+        val newResult = generate(defaultSecretLength)
         put(key, newResult)
         return newResult
+    }
+
+    /**
+     * Generates a random secret of the given byte length encoded in Base64 with no padding and no
+     * line feeds.
+     */
+    fun generate(length: Int): String {
+        val bytes = ByteArray(length)
+        secureRandom.nextBytes(bytes)
+        return Base64.encodeToString(bytes, Base64.NO_WRAP or Base64.NO_PADDING)
     }
 
     /**
