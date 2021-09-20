@@ -11,6 +11,7 @@ import org.junit.runner.RunWith
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -56,6 +57,8 @@ class SecretsTest {
 
         val generatedSecret = secrets.get("generated", 16)
         assertEquals(generatedSecret, secrets.get("generated"))
-        assertEquals(16, Base64.decode(generatedSecret, Base64.DEFAULT).size)
+        assertEquals(16, Base64.decode(generatedSecret, Base64.NO_WRAP or Base64.NO_PADDING).size)
+        assertFalse(generatedSecret.contains("\n"))
+        assertFalse(generatedSecret.contains("="))
     }
 }
