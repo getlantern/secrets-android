@@ -41,14 +41,16 @@ class SecretsTest {
             secrets.get("oldSecret"),
             "old unencrypted secret should still be available"
         )
-        assertNull(
-            prefs.getString("oldSecret_unencrypted", null),
-            "old unencrypted secret should have been removed from database after first fetch"
-        )
-        assertNotNull(
-            prefs.getString("oldSecret", null),
-            "oldSecret should have been moved into encrypted value after first fetch"
-        )
+        if (secrets.isEncrypted) {
+            assertNull(
+                prefs.getString("oldSecret_unencrypted", null),
+                "old unencrypted secret should have been removed from database after first fetch"
+            )
+            assertNotNull(
+                prefs.getString("oldSecret", null),
+                "oldSecret should have been moved into encrypted value after first fetch"
+            )
+        }
         assertNotEquals(
             newSecret,
             prefs.getString("newSecret", null),
@@ -57,8 +59,17 @@ class SecretsTest {
 
         val generatedSecret = secrets.get("generated", 16)
         assertEquals(generatedSecret, secrets.get("generated"))
-        assertEquals(16, Base64.decode(generatedSecret, Base64.NO_WRAP or Base64.NO_PADDING).size)
+        assertEquals(16, Base64.decode(generatedSecret, Secrets.base64EncodingStyle).size)
         assertFalse(generatedSecret.contains("\n"))
         assertFalse(generatedSecret.contains("="))
+    }
+
+    @Test
+    fun testBase64Migration() {
+        val valueString = "some string"
+        val value = valueString.toByteArray(Charsets.UTF_8)
+        val defaultEncoded = Base64.encodeToString(value, Base64.DEFAULT)
+        val decodedNewStyle = Base64.decode(defaultEncoded, Base64.NO_WRAP or Base64.NO_PADDING)
+        assertEquals(valueString, decodedNewStyle.toString(Charsets.UTF_8))
     }
 }

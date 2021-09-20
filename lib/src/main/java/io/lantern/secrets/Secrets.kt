@@ -82,13 +82,13 @@ class Secrets(private val masterKeyAlias: String, private val prefs: SharedPrefe
     fun generate(length: Int): String {
         val bytes = ByteArray(length)
         secureRandom.nextBytes(bytes)
-        return Base64.encodeToString(bytes, Base64.NO_WRAP or Base64.NO_PADDING)
+        return Base64.encodeToString(bytes, base64EncodingStyle)
     }
 
     /**
      * Indicates whether or not these secrets are encrypted.
      */
-    private val isEncrypted: Boolean
+    internal val isEncrypted: Boolean
         get() {
             return Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
         }
@@ -119,17 +119,14 @@ class Secrets(private val masterKeyAlias: String, private val prefs: SharedPrefe
     fun seal(plainText: String): String {
         return Base64.encodeToString(
             doSeal(plainText.toByteArray(Charset.defaultCharset())),
-            Base64.DEFAULT
+            base64EncodingStyle
         )
     }
 
     @RequiresApi(api = Build.VERSION_CODES.M)
     fun unseal(cipherText: String): String {
         return doUnseal(
-            Base64.decode(
-                cipherText,
-                Base64.DEFAULT
-            )
+            Base64.decode(cipherText, Base64.NO_WRAP or Base64.NO_PADDING)
         ).toString(Charset.defaultCharset())
     }
 
@@ -153,5 +150,6 @@ class Secrets(private val masterKeyAlias: String, private val prefs: SharedPrefe
     companion object {
         private const val androidKeyStoreName = "AndroidKeyStore"
         private const val cipherName = "AES/GCM/NoPadding"
+        internal const val base64EncodingStyle = Base64.NO_WRAP or Base64.NO_PADDING
     }
 }
