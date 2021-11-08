@@ -15,6 +15,29 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /**
+ * This exception indicates that a requested secret was still stored in the old insecure
+ * string-based format. You can resolve this by calling regenerate() or update().
+ */
+class InsecureSecretException(
+    private val secrets: Secrets,
+    private val key: String,
+    val secret: String
+) :
+    Exception("Detected insecure secret, recommend updating or regenerating secret.") {
+    // regenerates the secret as a random secret of the specified byte length
+    fun regenerate(length: Int): ByteArray {
+        val newSecret = Secrets.generate(length)
+        update(newSecret)
+        return newSecret
+    }
+
+    // updates this secre with the newSecret
+    fun update(newSecret: ByteArray) {
+        secrets.put(key, newSecret)
+    }
+}
+
+/**
  * Provides a mechanism for securely managing secrets stored in SharedPreferences. On Android M(23)
  * and above, values are encrypted using AES256 GCM. On older versions of Android that don't support
  * AES256 GCM natively, secrets are not encrypted at all.
@@ -25,8 +48,15 @@ import javax.crypto.spec.GCMParameterSpec
  * @param masterKeyAlias the name of the AES/GCM master key in the Android Key Store. Secrets will
  *        automatically generate a master key if necessary
  * @param prefs the SharedPreferences in which to store secrets
+ * @param prefs legacyPrefs the SharedPreferences where secrets used to be stored using the older
+ *              less secure version of Secrets (if implementing this in a system that had already
+ *              used the original version)
  */
-class Secrets(private val masterKeyAlias: String, private val prefs: SharedPreferences) {
+class Secrets(
+    private val masterKeyAlias: String,
+    private val prefs: SharedPreferences,
+    private val legacyPrefs: SharedPreferences? = null
+) {
     /**
      * Secrets uses the AndroidKeyStore to store key material. This ensures that the key material
      * never enters the Application's process space during crypto operations.
@@ -35,23 +65,29 @@ class Secrets(private val masterKeyAlias: String, private val prefs: SharedPrefe
         load(null)
     }
 
-    private val secureRandom: SecureRandom
-        get() {
-            return SecureRandom()
-        }
-
-    fun put(key: String, secret: String) {
+    fun put(key: String, secret: ByteArray) {
         if (isEncrypted) {
             prefs.edit().putString(key, seal(secret)).commit()
+            // clear value from legacy preferences just in case it was still in there
+            legacyPrefs?.edit()?.putString(key, null)?.commit()
         } else {
-            prefs.edit().putString("${key}_unencrypted", secret).commit()
+            prefs.edit().putString("${key}_unencrypted", toBase64(secret)).commit()
         }
     }
 
+    @Throws(InsecureSecretException::class)
     @Synchronized
-    fun get(key: String): String? {
+    fun get(key: String): ByteArray? {
         val unencryptedKey = "${key}_unencrypted"
-        val unencryptedSecret = prefs.getString(unencryptedKey, null)
+        val _unencryptedSecret = prefs.getString(unencryptedKey, null) ?: run {
+            val legacyUnencryptedSecret = legacyPrefs?.getString(unencryptedKey, null)
+            if (legacyUnencryptedSecret != null) {
+                legacyPrefs?.edit()?.putString(unencryptedKey, null)?.commit()
+                prefs.edit().putString(unencryptedKey, null).commit()
+            }
+            legacyUnencryptedSecret
+        }
+        val unencryptedSecret = _unencryptedSecret?.let { fromBase64(it) }
         if (!isEncrypted) {
             return unencryptedSecret
         }
@@ -61,11 +97,20 @@ class Secrets(private val masterKeyAlias: String, private val prefs: SharedPrefe
             prefs.edit().putString(unencryptedKey, null).commit()
             return unencryptedSecret
         }
-        return prefs.getString(key, null)?.let { unseal(it) }
+        return prefs.getString(key, null)?.let { unseal(it) } ?: run {
+            val legacyPlainText = legacyPrefs
+                ?.getString(key, null)
+                ?.let { legacyUnseal(it) }
+            if (legacyPlainText != null) {
+                throw InsecureSecretException(this, key, legacyPlainText)
+            }
+            null
+        }
     }
 
+    @Throws(InsecureSecretException::class)
     @Synchronized
-    fun get(key: String, defaultSecretLength: Int): String {
+    fun get(key: String, defaultSecretLength: Int): ByteArray {
         val result = get(key)
         if (result != null) {
             return result
@@ -73,16 +118,6 @@ class Secrets(private val masterKeyAlias: String, private val prefs: SharedPrefe
         val newResult = generate(defaultSecretLength)
         put(key, newResult)
         return newResult
-    }
-
-    /**
-     * Generates a random secret of the given byte length encoded in Base64 with no padding and no
-     * line feeds.
-     */
-    fun generate(length: Int): String {
-        val bytes = ByteArray(length)
-        secureRandom.nextBytes(bytes)
-        return Base64.encodeToString(bytes, base64EncodingStyle)
     }
 
     /**
@@ -116,18 +151,23 @@ class Secrets(private val masterKeyAlias: String, private val prefs: SharedPrefe
     }
 
     @RequiresApi(api = Build.VERSION_CODES.M)
-    fun seal(plainText: String): String {
-        return Base64.encodeToString(
-            doSeal(plainText.toByteArray(Charset.defaultCharset())),
-            base64EncodingStyle
-        )
+    fun seal(plainText: ByteArray): String {
+        return toBase64(doSeal(plainText))
     }
 
     @RequiresApi(api = Build.VERSION_CODES.M)
-    fun unseal(cipherText: String): String {
-        return doUnseal(
-            Base64.decode(cipherText, Base64.NO_WRAP or Base64.NO_PADDING)
-        ).toString(Charset.defaultCharset())
+    internal fun legacySeal(plainText: String): String {
+        return seal(plainText.toByteArray(Charset.defaultCharset()))
+    }
+
+    @RequiresApi(api = Build.VERSION_CODES.M)
+    internal fun unseal(cipherText: String): ByteArray {
+        return doUnseal(fromBase64(cipherText))
+    }
+
+    @RequiresApi(api = Build.VERSION_CODES.M)
+    internal fun legacyUnseal(cipherText: String): String {
+        return unseal(cipherText).toString(Charset.defaultCharset())
     }
 
     @RequiresApi(api = Build.VERSION_CODES.M)
@@ -151,5 +191,23 @@ class Secrets(private val masterKeyAlias: String, private val prefs: SharedPrefe
         private const val androidKeyStoreName = "AndroidKeyStore"
         private const val cipherName = "AES/GCM/NoPadding"
         internal const val base64EncodingStyle = Base64.NO_WRAP or Base64.NO_PADDING
+
+        fun toBase64(bytes: ByteArray): String = Base64.encodeToString(bytes, base64EncodingStyle)
+
+        fun fromBase64(str: String): ByteArray = Base64.decode(str, base64EncodingStyle)
+
+        /**
+         * Generates a random secret of the given byte length.
+         */
+        fun generate(length: Int): ByteArray {
+            val bytes = ByteArray(length)
+            secureRandom.nextBytes(bytes)
+            return bytes
+        }
+
+        private val secureRandom: SecureRandom
+            get() {
+                return SecureRandom()
+            }
     }
 }

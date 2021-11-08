@@ -8,13 +8,17 @@ import android.util.Base64
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.runner.RunWith
+import java.util.Arrays
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.test.fail
+
+private val charset = Charsets.UTF_8
 
 @RunWith(AndroidJUnit4::class)
 class SecretsTest {
@@ -24,21 +28,19 @@ class SecretsTest {
         val prefs = ctx.getSharedPreferences(UUID.randomUUID().toString(), Context.MODE_PRIVATE)
         val secrets = Secrets(
             UUID.randomUUID().toString(),
-            prefs
+            prefs,
         )
 
-        val oldSecret = "I'm an old secret that wasn't secret"
-        prefs.edit().putString("oldSecret_unencrypted", oldSecret).commit()
-        val newSecret = "I'm a new secret"
+        val oldSecret = "I'm an old secret that wasn't secret".toByteArray(charset)
+        prefs.edit().putString("oldSecret_unencrypted", Secrets.toBase64(oldSecret)).commit()
+        val newSecret = "I'm a new secret".toByteArray(charset)
         secrets.put("newSecret", newSecret)
-        assertEquals(
-            newSecret,
-            secrets.get("newSecret"),
+        assertTrue(
+            Arrays.equals(newSecret, secrets.get("newSecret")),
             "new secret should round-trip successfully"
         )
-        assertEquals(
-            oldSecret,
-            secrets.get("oldSecret"),
+        assertTrue(
+            Arrays.equals(oldSecret, secrets.get("oldSecret")),
             "old unencrypted secret should still be available"
         )
         if (secrets.isEncrypted) {
@@ -58,18 +60,44 @@ class SecretsTest {
         )
 
         val generatedSecret = secrets.get("generated", 16)
-        assertEquals(generatedSecret, secrets.get("generated"))
-        assertEquals(16, Base64.decode(generatedSecret, Secrets.base64EncodingStyle).size)
-        assertFalse(generatedSecret.contains("\n"))
-        assertFalse(generatedSecret.contains("="))
+        assertTrue(Arrays.equals(generatedSecret, secrets.get("generated")))
+        assertEquals(16, generatedSecret.size)
     }
 
     @Test
     fun testBase64Migration() {
         val valueString = "some string"
-        val value = valueString.toByteArray(Charsets.UTF_8)
+        val value = valueString.toByteArray(charset)
         val defaultEncoded = Base64.encodeToString(value, Base64.DEFAULT)
         val decodedNewStyle = Base64.decode(defaultEncoded, Base64.NO_WRAP or Base64.NO_PADDING)
-        assertEquals(valueString, decodedNewStyle.toString(Charsets.UTF_8))
+        assertEquals(valueString, decodedNewStyle.toString(charset))
+    }
+
+    @Test
+    fun testEncodingMigration() {
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        val prefs = ctx.getSharedPreferences(UUID.randomUUID().toString(), Context.MODE_PRIVATE)
+        val legacyPrefs = ctx.getSharedPreferences(UUID.randomUUID().toString(), Context.MODE_PRIVATE)
+        val secrets = Secrets(
+            UUID.randomUUID().toString(),
+            prefs,
+            legacyPrefs
+        )
+
+        val legacySecret = Secrets.toBase64(Secrets.generate(16))
+        legacyPrefs.edit().putString("secret", secrets.legacySeal(legacySecret)).commit()
+
+        try {
+            secrets.get("secret")
+            fail("accessing insecure secret should have failed")
+        } catch (e: InsecureSecretException) {
+            assertEquals(
+                legacySecret, e.secret,
+                "exception should have contained legacy secret"
+            )
+            e.regenerate(16)
+            val newSecret = secrets.get("secret")
+            assertEquals(16, newSecret?.size)
+        }
     }
 }
